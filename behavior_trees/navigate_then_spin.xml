@@ -1,0 +1,57 @@
+<!--
+  This Behavior Tree wraps the standard Nav2 "navigate to pose with replanning + recovery"
+  behavior inside a subtree, then performs a spin.
+
+  Notes:
+  - The navigation subtree shares the same blackboard (goal/path/etc) via __shared_blackboard.
+  - The whole sequence is wrapped in KeepRunningUntilFailure to loop continuously.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <KeepRunningUntilFailure>
+      <Sequence name="NavigateThenSpin">
+        <SubTree ID="NavigateToPoseWithReplanningAndRecovery" __shared_blackboard="true"/>
+        <Wait wait_duration="2.0"/>
+        <!-- spin_dist is in radians: 380deg = 6.632251... rad -->
+        <Spin spin_dist="6.63225"/>
+        <Wait wait_duration="2.0"/>
+      </Sequence>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+
+  <BehaviorTree ID="NavigateToPoseWithReplanningAndRecovery">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
+
+<!--
+  This Behavior Tree replans the global path periodically at 1 Hz and it also has
+  recovery actions specific to planning / control as well as general system issues.
+  This will be continuous if a kinematically valid planner is selected.
+-->
+<!-- Previous inline version was removed in favor of the subtree-based refactor above. -->
