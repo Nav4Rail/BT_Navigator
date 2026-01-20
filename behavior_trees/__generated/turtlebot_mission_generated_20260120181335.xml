@@ -1,0 +1,16 @@
+<!-- Generated on 2026-01-20 18:13:37 -->
+<!-- Prompt: Attends 2s, tourne de 90°, attends 1s -->
+<!-- Model: mistral-large-latest -->
+<!-- API base: https://api.mistral.ai/v1 -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="TurtlebotMission">
+      <!-- Attendre 2 secondes -->
+      <Wait wait_duration="2.0" />
+      <!-- Tourner de 90° (π/2 radians) -->
+      <Spin spin_dist="1.57" />
+      <!-- Attendre 1 seconde -->
+      <Wait wait_duration="1.0" />
+    </Sequence>
+  </BehaviorTree>
+</root>

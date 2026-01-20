@@ -7,11 +7,17 @@ err() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 AUTO_MODE=0
 PROMPT=""
 NO_RVIZ=0
+SEND_GOAL=0
+INITIAL_POSE="0.0,0.0,0.0" # x,y,yaw(rad) in map
+GOAL_POSE="0.0,0.0,0.0"    # x,y,yaw(rad) in map
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --auto) AUTO_MODE=1; shift ;;
     --no-rviz) NO_RVIZ=1; shift ;;
+    --send-goal) SEND_GOAL=1; shift ;;
+    --initial-pose) INITIAL_POSE="${2:-}"; shift 2 ;;
+    --goal-pose) GOAL_POSE="${2:-}"; shift 2 ;;
     *) PROMPT="$*"; break ;;
   esac
 done
@@ -30,6 +36,12 @@ GENERATED_BT_XML="${GENERATED_BT_XML:-$BT_NAV_DIR/behavior_trees/__generated/tur
 
 TMP_PARAMS="/tmp/nav2_params_generated_bt.yaml"
 
+if [ "$NO_RVIZ" -eq 1 ] && [ "$SEND_GOAL" -eq 0 ]; then
+  # Sans RViz, personne ne publie l'initial pose ni n'envoie de goal :
+  # on active donc le mode automatique d'exécution de mission.
+  SEND_GOAL=1
+fi
+
 cleanup() {
   if [ -n "${PIDS:-}" ]; then
     log "Arrêt des processes: $PIDS"
@@ -38,6 +50,44 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+yaw_to_quat() {
+  # args: yaw(rad) -> prints: "<qz> <qw>"
+  python3 - <<'PY'
+import math, sys
+yaw = float(sys.argv[1])
+qz = math.sin(yaw/2.0)
+qw = math.cos(yaw/2.0)
+print(f"{qz} {qw}")
+PY
+}
+
+publish_initial_pose() {
+  local pose_csv="$1"
+  IFS=',' read -r IX IY IYAW <<< "$pose_csv"
+  if [ -z "$IX" ] || [ -z "$IY" ] || [ -z "$IYAW" ]; then
+    err "--initial-pose invalide. Attendu: \"x,y,yaw\" (ex: \"0.0,0.0,0.0\")"
+    return 1
+  fi
+  read -r IQZ IQW <<< "$(python3 -c "import math; yaw=float('$IYAW'); print(math.sin(yaw/2.0), math.cos(yaw/2.0))")"
+  log "Publication /initialpose (map): x=$IX y=$IY yaw=$IYAW"
+  ros2 topic pub -1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+    "{header: {frame_id: map}, pose: {pose: {position: {x: $IX, y: $IY, z: 0.0}, orientation: {z: $IQZ, w: $IQW}}, covariance: [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0685]}}"
+}
+
+send_nav_goal() {
+  local pose_csv="$1"
+  IFS=',' read -r GX GY GYAW <<< "$pose_csv"
+  if [ -z "$GX" ] || [ -z "$GY" ] || [ -z "$GYAW" ]; then
+    err "--goal-pose invalide. Attendu: \"x,y,yaw\" (ex: \"0.0,0.0,0.0\")"
+    return 1
+  fi
+  read -r GQZ GQW <<< "$(python3 -c "import math; yaw=float('$GYAW'); print(math.sin(yaw/2.0), math.cos(yaw/2.0))")"
+  log "Envoi d'un goal Nav2 (/navigate_to_pose) pour déclencher l'exécution du BT..."
+  ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+    "{pose: {header: {frame_id: map}, pose: {position: {x: $GX, y: $GY, z: 0.0}, orientation: {z: $GQZ, w: $GQW}}}}" &
+  PIDS="$PIDS $!"
+}
 
 log "Sourcing ROS 2 Humble..."
 source /opt/ros/humble/setup.bash
@@ -106,11 +156,21 @@ sleep 2
 log "Lancement Nav2 localization..."
 ros2 launch nav2_bringup localization_launch.py use_sim_time:=True map:="$MAP_FILE" &
 PIDS="$PIDS $!"
+sleep 3
+
+# AMCL a besoin d'une pose initiale pour publier map->odom.
+publish_initial_pose "$INITIAL_POSE" || exit 1
 sleep 2
 
 log "Lancement Nav2 navigation (params_file=$TMP_PARAMS)..."
 ros2 launch nav2_bringup navigation_launch.py use_sim_time:=True params_file:="$TMP_PARAMS" &
 PIDS="$PIDS $!"
+
+if [ "$SEND_GOAL" -eq 1 ]; then
+  # Le BT "default_nav_to_pose_bt_xml" n'est exécuté que lorsqu'un goal NavigateToPose est envoyé.
+  sleep 3
+  send_nav_goal "$GOAL_POSE" || exit 1
+fi
 
 if [ "$NO_RVIZ" -eq 0 ]; then
   log "Lancement RViz..."

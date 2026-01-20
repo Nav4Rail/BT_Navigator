@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from xml.etree.ElementTree import Comment, Element, ElementTree, SubElement
 
+import datetime
+
 try:  # Support d'un fichier .env facultatif
     from dotenv import load_dotenv  # type: ignore
 except ImportError:  # pragma: no cover
@@ -51,7 +53,8 @@ DEFAULT_OUTPUT = (
     / "BT_Navigator"
     / "behavior_trees"
     / "__generated"
-    / "turtlebot_mission.xml"
+    / "turtlebot_mission_generated_"
+    f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.xml"
 )
 
 CATALOG_PATH = SCRIPT_DIR / "bt_nodes_catalog.json"
